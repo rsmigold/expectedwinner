@@ -18,9 +18,12 @@ library(forcats)
 library(weights)
 library(correlation)
 library(gt)
+library(readr)
+library(jtools)
 
 # ---- Load Data ----
-df <- read.csv("~/Documents/anes_mergedfile_2016-2020-2024panel_20260519.csv")
+df <- read_csv("anes_mergedfile_2016-2020-2024panel_20260519.csv")
+
 # ---- Clean ----
 df <- df %>%
   mutate(
@@ -52,7 +55,26 @@ df <- df %>%
     ),
     rpid3_16 = factor(rpid3_16, levels = 1:3,
                       labels = c("Democrat", "Independent", "Republican")),
-
+  #Education
+  redu_24 = if_else(V241465x < 0, NA_real_, V241465x),
+  redu_20 = if_else(V201511x < 0, NA_real_, V201511x),
+  redu_16 = case_when(
+      V161270 < 0 ~ NA_real_,
+      V161270 %in% c(1,8) ~ 1,  
+      V161270 == 9 | V161270 == 90 ~ 2, 
+      V161270 %in% c(10,12) ~ 3, 
+      V161270 == 13 ~ 4, 
+      V161270 %in% c(14,16) ~ 5
+  ),
+  
+  #Follow politics
+  campint_24 = if_else(V241004 < 0, NA_real_, V241004), #higher val = never 
+  campint_20 = if_else(V201005 < 0, NA_real_, V201005),  
+  campint_16 = if_else(V161003 < 0, NA_real_, V161003),   
+  #Interpersonal trust
+  ppltrust_24 = if_else(V241234 < 0, NA_real_, V241234), #higher val = never trust
+  ppltrust_20 = if_else(V201237 < 0, NA_real_, V201237), 
+  ppltrust_16 = if_else(V161219 < 0, NA_real_, V161219),
   #Expected winner
   win_24 = case_when(
     V241211 < 0 ~ NA_real_,
@@ -167,26 +189,176 @@ df <- df %>%
 var_label(df) <- list(
   rpid3_24 = "2024: Party ID",
   rpid3_20 = "2020: Party ID",
-  rpid3_16 = "2016: Party ID"
+  rpid3_16 = "2016: Party ID",
+  campint_24 = "Never follow politics",
+  campint_20 = "Never follow politics",
+  campint_16 = "Never follow politics",
+  ppltrust_24 = "Never trust other people",
+  ppltrust_20 = "Never trust other people",
+  ppltrust_16 = "Never trust other people"
 )
 
-# ---- Set weight ----
-svy_design <- svydesign( 
-  ids     = ~xx,
-  strata  = ~yy,
-  weights = ~zz,
+# -- subset to those who completed 2024
+df <- subset(df, !is.na(V240106b))
+
+# ---- Set weights ----
+svy24 <- svydesign( 
+  ids     = ~V240106c,
+  strata  = ~V240106d,
+  weights = ~V240106b,
   data    = df,
   nest    = TRUE
 )
+svy20 <- svydesign( 
+  ids     = ~V200011c,
+  strata  = ~V200011d,
+  weights = ~V200011b,
+  data    = df,
+  nest    = TRUE
+)
+svy16 <- svydesign( 
+  ids     = ~V160202,
+  strata  = ~V160201,
+  weights = ~V160102,
+  data    = df,
+  nest    = TRUE
+)
+options(survey.lonely.psu = "adjust")
+
+#relevel pid for models
+svy24$variables$rpid3_24 <- relevel(svy24$variables$rpid3_24, ref = "Independent")
+svy20$variables$rpid3_20 <- relevel(svy20$variables$rpid3_20, ref = "Independent")
+svy16$variables$rpid3_16 <- relevel(svy16$variables$rpid3_16, ref = "Independent")
 
 # ---- Analyze ----
 table(df$partymatch_24, df$prevotematch_24)
 
+#CORRELATIONS
 #correlations of partymatch and votematch with countfair, countacc and trust
+#match measures by year
+svycor(~partymatch_24 + prevotematch_24, design = svy24, na.rm = TRUE, boot = TRUE) #.7
+svycor(~partymatch_20 + prevotematch_20, design = svy20, na.rm = TRUE, boot = TRUE) #.54
+svycor(~partymatch_16 + prevotematch_16, design = svy16, na.rm = TRUE, boot = TRUE) #.64
 
+
+svycor(~partymatch_24 + prevotematch_24 + countfair_24 + trust_24 + countacc_24, 
+       design = svy24, na.rm = TRUE, boot = TRUE) 
+#low correlations between match and outcomes; highest is prevotematch & countacc @ .10
+svycor(~partymatch_20 + prevotematch_20 + countfair_20 + trust_20 + countacc_20, 
+       design = svy20, na.rm = TRUE, boot = TRUE) 
+#low correlations between match and outcomes; highest is prevotematch & countacc @ .05
+svycor(~partymatch_16 + prevotematch_16 + countfair_16, 
+       design = svy16, na.rm = TRUE, boot = TRUE) 
+
+#MEANS
 #mean trust, countfair, countacc at match = 0, 1 at each point in time
+svyby(~countfair_24, ~prevotematch_24, svy24, svymean, na.rm = TRUE) #0.04
+svyby(~countfair_20, ~prevotematch_20, svy20, svymean, na.rm = TRUE) #-0.02
+svyby(~countfair_16, ~prevotematch_16, svy16, svymean, na.rm = TRUE) #0.01
 
+#similar size differences (~0.04)
+svyby(~trust_24, ~prevotematch_24, svy24, svymean, na.rm = TRUE) 
+svyby(~trust_20, ~prevotematch_20, svy20, svymean, na.rm = TRUE) 
+#similar size differences (~0.07)
+svyby(~trust_24, ~partymatch_24, svy24, svymean, na.rm = TRUE) 
+svyby(~trust_20, ~partymatch_20, svy20, svymean, na.rm = TRUE) 
+
+#MODELS
 #model: DVs: trust, countfair, countacc; IVs: partymatch or votematch, education, 
-#interpersonal trust, followpol, party(?)
+#interpersonal trust, followpol, party
+#2024
+fair24_party <- svyglm(countfair_24 ~ partymatch_24 + redu_24 + rpid3_24 + 
+                 ppltrust_24 + campint_24, 
+                 design = svy24, na.action = na.omit, family = "gaussian")
+summary(fair24_party)
+fair24_prevote <- svyglm(countfair_24 ~ prevotematch_24 + redu_24 + rpid3_24 + 
+                         ppltrust_24 + campint_24, 
+                       design = svy24, na.action = na.omit, family = "gaussian")
+summary(fair24_prevote)
 
+acc24_party <- svyglm(countacc_24 ~ partymatch_24 + redu_24 + rpid3_24 + 
+                         ppltrust_24 + campint_24, 
+                       design = svy24, na.action = na.omit, family = "gaussian")
+summary(acc24_party)
+acc24_prevote <- svyglm(countacc_24 ~ prevotematch_24 + redu_24 + rpid3_24 + 
+                           ppltrust_24 + campint_24, 
+                         design = svy24, na.action = na.omit, family = "gaussian")
+summary(acc24_prevote)
 
+trust24_party <- svyglm(trust_24 ~ partymatch_24 + redu_24 + rpid3_24 + 
+                        ppltrust_24 + campint_24, 
+                      design = svy24, na.action = na.omit, family = "gaussian")
+summary(trust24_party)
+trust24_prevote <- svyglm(trust_24 ~ prevotematch_24 + redu_24 + rpid3_24 + 
+                          ppltrust_24 + campint_24, 
+                        design = svy24, na.action = na.omit, family = "gaussian")
+summary(trust24_prevote)
+
+#2020
+fair20_party <- svyglm(countfair_20 ~ partymatch_20 + redu_20 + rpid3_20 + 
+                         ppltrust_20 + campint_20, 
+                       design = svy20, na.action = na.omit, family = "gaussian")
+summary(fair20_party)
+fair20_prevote <- svyglm(countfair_20 ~ prevotematch_20 + redu_20 + rpid3_20 + 
+                           ppltrust_20 + campint_20, 
+                         design = svy20, na.action = na.omit, family = "gaussian")
+summary(fair20_prevote)
+acc20_party <- svyglm(countacc_20 ~ partymatch_20 + redu_20 + rpid3_20 + 
+                        ppltrust_20 + campint_20, 
+                      design = svy20, na.action = na.omit, family = "gaussian")
+summary(acc20_party)
+acc20_prevote <- svyglm(countacc_20 ~ prevotematch_20 + redu_20 + rpid3_20 + 
+                          ppltrust_20 + campint_20, 
+                        design = svy20, na.action = na.omit, family = "gaussian")
+summary(acc20_prevote)
+trust20_party <- svyglm(trust_20 ~ partymatch_20 + redu_20 + rpid3_20 + 
+                          ppltrust_20 + campint_20, 
+                        design = svy20, na.action = na.omit, family = "gaussian")
+summary(trust20_party)
+trust20_prevote <- svyglm(trust_20 ~ prevotematch_20 + redu_20 + rpid3_20 + 
+                            ppltrust_20 + campint_20, 
+                          design = svy20, na.action = na.omit, family = "gaussian")
+summary(trust20_prevote)
+
+fair16_party <- svyglm(countfair_16 ~ partymatch_16 + redu_16 + rpid3_16 + 
+                         ppltrust_16 + campint_16, 
+                       design = svy16, na.action = na.omit, family = "gaussian")
+summary(fair16_party)
+fair16_prevote <- svyglm(countfair_16 ~ prevotematch_16 + redu_16 + rpid3_16 + 
+                           ppltrust_16 + campint_16, 
+                         design = svy16, na.action = na.omit, family = "gaussian")
+summary(fair16_prevote)
+
+#export
+stargazer(fair24_party, fair24_prevote, acc24_party, acc24_prevote,
+          trust24_party, trust24_prevote,
+          type = "html", out = "expwin24.html")
+
+export_summs(fair24_party, fair20_party, fair16_party, 
+             fair24_prevote, fair20_prevote, fair16_prevote, 
+             acc24_party, acc20_party, acc24_prevote, acc20_prevote,
+             trust24_party, trust20_party, trust24_prevote, trust20_prevote,
+             model.names = c("Votes Counted Fairly (2024)", "Votes Counted Fairly (2020)", "Votes Counted Fairly (2016)",
+                             "Votes Counted Fairly (2024)",  "Votes Counted Fairly (2020)", "Votes Counted Fairly (2016)",   
+                             "Votes Counted Accurately (2024)", "Votes Counted Accurately (2020)", 
+                             "Votes Counted Accurately (2024)", "Votes Counted Accurately (2020)",
+                             "Trust Election Officials (2024)", "Trust Election Officials (2020)", 
+                             "Trust Election Officials (2024)", "Trust Election Officials (2020)"),
+             error_format = "({std.error})", 
+             coefs = c("Expect own party to win" = "partymatch_24",
+                       "Expect own party to win" = "partymatch_20",
+                       "Expect own party to win" = "partymatch_16",
+                       "Expect preferred candidate to win" = "prevotematch_24",
+                       "Expect preferred candidate to win" = "prevotematch_20",
+                       "Expect preferred candidate to win" = "prevotematch_16",
+                       "Democrat" = "rpid3_24Democrat",
+                       "Democrat" = "rpid3_20Democrat", "Democrat" = "rpid3_16Democrat",
+                       "Republican" = "rpid3_24Republican", 
+                       "Republican" = "rpid3_20Republican", "Republican" = "rpid3_16Republican",
+                       "Education level" = "redu_24",
+                       "Education level" = "redu_20", "Education level" = "redu_16",
+                       "Never trust people" = "ppltrust_24",
+                       "Never trust people" = "ppltrust_20", "Never trust people" = "ppltrust_16",
+                       "Never follow politics" = "campint_24",
+                       "Never follow politics" = "campint_20", "Never follow politics" = "campint_16"),
+             to.file = "html", file.name = "expwin.html")
