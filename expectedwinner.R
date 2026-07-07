@@ -360,5 +360,6 @@ export_summs(fair24_party, fair20_party, fair16_party,
                        "Never trust people" = "ppltrust_24",
                        "Never trust people" = "ppltrust_20", "Never trust people" = "ppltrust_16",
                        "Never follow politics" = "campint_24",
-                       "Never follow politics" = "campint_20", "Never follow politics" = "campint_16"),
+                       "Never follow politics" = "campint_20", "Never follow politics" = "campint_16",
+                      "Intercept" = "(Intercept)"),
              to.file = "html", file.name = "expwin.html")
